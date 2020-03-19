@@ -13,30 +13,88 @@
  *       (excluding this single-byte header)
  */
 
-/*
- *
- * Quick note about my implementation
- * packet format:
- * |  1  |  1  |  1  |           the rest         |
- * | ack | syn | len |        payload       | chk |
- * 
- * payload is checksumed with crc16 checksumed, so there will be a 2-byte
- * checksum at the tail of the payload. **len** is payload + chk.
- * 
- * crc-16-ccitt (the one used in redis) is used here, and generator function of
- * which is:
- * x**16 + x**12 + x**5 + 1
- * implementation can be found in crc16.cc
- */
 
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+#include <algorithm>
 
 #include "rdt_struct.h"
 #include "rdt_sender.h"
+#include "rdt_utils.h"
 
+using namespace utils;
+
+const int MAX_SEQ = 255;
+const int WINDOW_SIZE = 16;
+static packet in_buf[WINDOW_SIZE];
+static packet out_buf[WINDOW_SIZE];
+
+struct TimerItem {
+    int id;
+    double time;
+    TimerItem *next;
+};
+
+static TimerItem _prehead = {0, 0, nullptr};
+static TimerItem *prehead = &_prehead;
+
+static void Timer_AddTimeout(int id, double timeout) {
+    TimerItem *cur = prehead;
+    time_t dest = GetSimulationTime() + timeout;
+    while(cur->next && cur->next->time < dest) cur = cur->next;
+    TimerItem *new_item = new TimerItem{id, dest, cur->next};
+    cur->next = new_item;
+    if(cur == prehead) {
+        // reset the timer
+        if(Sender_isTimerSet())
+            Sender_StopTimer();
+        Sender_StartTimer(dest - GetSimulationTime());
+    }
+}
+
+static void Timer_CancelTimeout(int id) {
+    TimerItem *cur = prehead;
+    while(cur->next && cur->next->id != id) cur = cur->next;
+    if(cur->next == nullptr) {
+        fprintf(stderr, "Error: %d not found in timer queue.\n", id);
+        return;
+    }
+    // remove this entry from linked list
+    TimerItem *target = cur->next;
+    cur->next = target->next;
+    delete target;
+}
+
+
+void Sender_Timeout()
+{
+    constexpr double epsilon = 5e-3;    // 5ms
+    if(prehead->next == nullptr) {
+        fprintf(stderr, "Error: Clock time out and timer queue is empty.\n");
+        return;
+    }
+    // check time for accuracy
+    if(GetSimulationTime() < prehead->next->time - epsilon) {
+        fprintf(stdout, "Warning: Clock time out but not there yet."
+                        "Current time = %f, expected time = %f\n",
+                        GetSimulationTime(), prehead->next->time);
+    } else {
+        // pop list
+        TimerItem *item = prehead->next;
+        prehead->next = prehead->next->next;
+        delete item;
+    }
+    // restart timer for next event
+    if(prehead->next)
+        Sender_StartTimer(prehead->next->time - GetSimulationTime());
+}
+
+template <typename T>
+static inline bool between(T a, T b, T c) {
+    return a < c ? (a <= b && b < c) : (a <= b || b < c);
+}
 
 /* sender initialization, called once at the very beginning */
 void Sender_Init()
@@ -57,40 +115,28 @@ void Sender_Final()
    sender */
 void Sender_FromUpperLayer(struct message *msg)
 {
-    /* 1-byte header indicating the size of the payload */
-    int header_size = 1;
-
-    /* maximum payload size */
-    int maxpayload_size = RDT_PKTSIZE - header_size;
-
     /* split the message if it is too big */
 
     /* reuse the same packet data structure */
-    packet pkt;
+    rdt_message buffer;
 
-    /* the cursor always points to the first unsent byte in the message */
-    int cursor = 0;
+    int cursor = 0; // points to the first unsent byte in the message
 
-    while (msg->size-cursor > maxpayload_size) {
-	/* fill in the packet */
-	pkt.data[0] = maxpayload_size;
-	memcpy(pkt.data+header_size, msg->data+cursor, maxpayload_size);
+    while (cursor < msg->size) {
+        buffer.len = std::max(RDT_PAYLOAD_MAXSIZE, msg->size - cursor);
+        memcpy(buffer.payload, msg->data + cursor, buffer.len);
 
-	/* send it out through the lower layer */
-	Sender_ToLowerLayer(&pkt);
+        // calculate checksum
+        int crc = CRC16::calc((const char *)&buffer, 4 * sizeof(uint8_t));
+        crc = CRC16::calc(buffer.payload, buffer.len, crc);
+        
+        // write the checksum, big-endian
+        buffer.checksum = (crc >> 8) + (crc << 8) & 0xff;
+        /* send it out through the lower layer */
+        Sender_ToLowerLayer((packet *)&buffer);
 
-	/* move the cursor */
-	cursor += maxpayload_size;
-    }
-
-    /* send out the last packet */
-    if (msg->size > cursor) {
-	/* fill in the packet */
-	pkt.data[0] = msg->size-cursor;
-	memcpy(pkt.data+header_size, msg->data+cursor, pkt.data[0]);
-
-	/* send it out through the lower layer */
-	Sender_ToLowerLayer(&pkt);
+        /* move the cursor */
+        cursor += buffer.len;
     }
 }
 
@@ -100,7 +146,3 @@ void Sender_FromLowerLayer(struct packet *pkt)
 {
 }
 
-/* event handler, called when the timer expires */
-void Sender_Timeout()
-{
-}

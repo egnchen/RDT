@@ -41,12 +41,21 @@ const uint16_t CRC16::crc16tab[256]= {
     0x6e17,0x7e36,0x4e55,0x5e74,0x2e93,0x3eb2,0x0ed1,0x1ef0
 };
  
-uint16_t CRC16::calc(const char *buf, int len) {
-    int counter;
-    uint16_t crc = 0;
-    for (counter = 0; counter < len; counter++)
-            crc = (crc<<8) ^ crc16tab[((crc>>8) ^ *buf++)&0x00FF];
+
+/*
+ * Calculate CRC-16 checksum
+ */
+inline uint16_t CRC16::calc(const char *buf, int len, uint16_t crc = 0) {
+    for (int counter = 0; counter < len; counter++)
+        crc = (crc<<8) ^ crc16tab[((crc>>8) ^ *buf++)&0x00FF];
     return crc;
+}
+
+/*
+ * Check whether a buffer containing a CRC-16 checksum is valid.
+ */
+inline bool CRC16::check(const char *buf, int len) {
+    return calc(buf, len) == 0;
 }
 
 }
