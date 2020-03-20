@@ -1,7 +1,7 @@
 # NOTE: Feel free to change the makefile to suit your own need.
 
 # compile and link flags
-CCFLAGS = -Wall -Og -g
+CCFLAGS = -Wall -g
 LDFLAGS = -Wall -g
 
 # make rules

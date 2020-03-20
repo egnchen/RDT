@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/rdt_sim",
-            "args": ["1000", "0.1", "100", "0", "0.02", "0", "0"],
+            "args": ["1000", "0.1", "100", "0.15", "0.15", "0.15", "0"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],

@@ -73,8 +73,10 @@ static void Timer_CancelTimeout(int id) {
 
 // timeout handler
 static void Timer_Timeout(int id) {
-    SENDER_INFO("Packet timeout, resending packet seq = %d", out_buf[id].seq);
     // resend that particular one
+    assert(between(window_start, id, (window_start + WINDOW_SIZE) & MAX_SEQ));
+    Timer_AddTimeout(id, SENDER_TIMEOUT);
+    SENDER_INFO("Packet timeout, resending packet seq = %d", out_buf[id].seq);
     Sender_ToLowerLayer((packet *)(out_buf + id));
 }
 
@@ -93,7 +95,6 @@ void Sender_Timeout()
     } else {
         // pop list
         do {
-            SENDER_INFO("Timer: %id timeout.", prehead->next->id);
             auto item = prehead->next;
             prehead->next = prehead->next->next;
             int id = item->id;
@@ -128,8 +129,8 @@ void Sender_Final()
 /* send out all packets ready to be sent in current sliding window */
 static void Sender_SendPackets() {
     uint8_t window_end = next_seq_number;
-    if(lt((window_start + WINDOW_SIZE) % MAX_SEQ, window_end))
-        window_end = (window_start + WINDOW_SIZE) % MAX_SEQ;
+    if(lt((window_start + WINDOW_SIZE) & MAX_SEQ, window_end))
+        window_end = (window_start + WINDOW_SIZE) & MAX_SEQ;
     while(between(window_start, to_send, window_end)) {
         rdt_message *buffer = out_buf + to_send;
         // outgoing packet have no flags
@@ -138,8 +139,8 @@ static void Sender_SendPackets() {
         // add timer
         Timer_AddTimeout(buffer->seq, SENDER_TIMEOUT);
         SENDER_INFO( 
-            "--> packet seq = %3d, len = %3d, checksum = %4x, window = %3d",
-            buffer->seq, buffer->len, buffer->checksum, window_start);
+            "--> packet seq = %03d, len = %03d, checksum = %04x, window = %03d - %03d",
+            buffer->seq, buffer->len, buffer->checksum, window_start, window_end);
         Sender_ToLowerLayer((packet *)buffer);
         inc(to_send);
     }
@@ -167,6 +168,7 @@ void Sender_FromUpperLayer(struct message *msg)
             SENDER_ERROR("buffer pool is full, next_seq == window_start == %d", next_seq_number);
         }
     }
+    SENDER_INFO("Token in packets, max sequence number = %d", seqn_t(next_seq_number - 1));
     Sender_SendPackets();
 }
 
@@ -178,11 +180,11 @@ void Sender_FromLowerLayer(struct packet *pkt)
     // sender receive acks
     // check validity
     if(rdtmsg->check() == false) {
-        SENDER_INFO("received a corrupted packet.");
+        SENDER_INFO("Received a corrupted packet.");
         return;
     }
     if(rdtmsg->flags == rdt_message::ACK) {
-        SENDER_INFO("Sender received ack = %d, window = %d", rdtmsg->ack, window_start);
+        SENDER_INFO("Received ack = %d, window = %d", rdtmsg->ack, window_start);
         while(lte(window_start, rdtmsg->ack)) {
             Timer_CancelTimeout(out_buf[window_start].seq);
             inc(window_start);

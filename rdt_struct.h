@@ -86,15 +86,13 @@ struct rdt_message {
 
     // check if the packet is corrupted.
     inline bool check() {
-        if(len > RDT_PAYLOAD_MAXSIZE) {
-            fprintf(stdout, "Check packet: Invalid length in header.\n");
+        if(len > RDT_PAYLOAD_MAXSIZE)
             return false;
-        }
+        if((this->flags & 0xFE) != 0)
+            return false;
         uint16_t s = get_checksum();
-        if(this->checksum != s) {
-            fprintf(stdout, "Check checksum failed: Excepting %x, actual %x.\n", s, this->checksum);
+        if(this->checksum != s)
             return false;
-        }
         return true;
     }
 };

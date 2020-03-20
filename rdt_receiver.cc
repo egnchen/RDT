@@ -21,6 +21,7 @@
 #include "rdt_receiver.h"
 
 static seqn_t window_start;
+static seqn_t received_last;
 static rdt_message in_buf[MAX_SEQ + 1];
 
 /* receiver initialization, called once at the very beginning */
@@ -28,6 +29,7 @@ void Receiver_Init()
 {
     fprintf(stdout, "At %.2fs: receiver initializing ...\n", GetSimulationTime());
     window_start = 0;
+    received_last = 0;
 }
 
 /* receiver finalization, called once at the very end.
@@ -52,43 +54,45 @@ void Receiver_FromLowerLayer(struct packet *pkt)
         return;
     }
     
-    // packet ordering
-    if(lt(rdtmsg->seq, window_start)) {
-        RECEIVER_INFO("Packet seq less than window number, ignored.");
-        return;
-    }
+    // if this packet's sequence number is within our range
+    if(!lt(rdtmsg->seq, window_start)) {
+        // update the lastest received packet number
+        if(lt(received_last, rdtmsg->seq))
+            received_last = rdtmsg->seq;
+        // copy to our internal buffer
+        memcpy(in_buf + rdtmsg->seq, rdtmsg, sizeof(rdt_message));
+        rdtmsg = in_buf + rdtmsg->seq;
+        // set received flag
+        rdtmsg->flags |= rdt_message::RECEIVED;
+        rdtmsg->flags &= ~rdt_message::NAKED;
 
-    // copy to our internal buffer
-    memcpy(in_buf + rdtmsg->seq, rdtmsg, sizeof(rdt_message));
-    rdtmsg = in_buf + rdtmsg->seq;
-    // set received flag
-    rdtmsg->flags |= rdt_message::RECEIVED;
-    rdtmsg->flags &= ~rdt_message::NAKED;
-
-    while(in_buf[window_start].flags & rdt_message::RECEIVED) {
-        message msg = message{
-            int(in_buf[window_start].len), in_buf[window_start].payload};
-        Receiver_ToUpperLayer(&msg);
-        // invalidate this buffer by unsetting RECEIVED
-        in_buf[window_start].flags &= ~rdt_message::RECEIVED;
-        inc(window_start);
-    }
-
-    // the next frame has yet not been received, send nak
-    // we don't have timer on receiver side, so we have no way to timeout
-    // nak here. If nak is lost, this method will deteriorate to GBN.
-    if(rdtmsg->seq > window_start) {
-        if((in_buf[window_start].flags & rdt_message::NAKED) == 0) {
-            in_buf[window_start].flags |= rdt_message::NAKED;
-            buffer.seq = 0;
-            buffer.ack = window_start;
-            buffer.flags = rdt_message::NAK;
-            buffer.len = 0;
-            buffer.fill_checksum();
-            RECEIVER_INFO("<-- nak = %d", window_start);
-            Receiver_ToLowerLayer((packet *)&buffer);
-            return;
+        while(in_buf[window_start].flags & rdt_message::RECEIVED) {
+            message msg = message{
+                int(in_buf[window_start].len), in_buf[window_start].payload};
+            Receiver_ToUpperLayer(&msg);
+            // invalidate this buffer by unsetting RECEIVED
+            in_buf[window_start].flags &= ~rdt_message::RECEIVED;
+            inc(window_start);
         }
+
+        // the next frame has yet not been received, send nak
+        // we don't have timer on receiver side, so we have no way to timeout
+        // nak here. If nak is lost, this method will deteriorate to GBN.
+        if(lt(window_start, rdtmsg->seq) && lt(rdtmsg->seq, received_last)) {
+            if((in_buf[window_start].flags & rdt_message::NAKED) == 0) {
+                in_buf[window_start].flags |= rdt_message::NAKED;
+                buffer.seq = 0;
+                buffer.ack = window_start;
+                buffer.flags = rdt_message::NAK;
+                buffer.len = 0;
+                buffer.fill_checksum();
+                RECEIVER_INFO("<-- nak = %d", window_start);
+                Receiver_ToLowerLayer((packet *)&buffer);
+                return;
+            }
+        }
+    } else {
+        RECEIVER_INFO("Packet seq less than window number, not saved.");
     }
     // send back ack
     buffer.seq = 0; // not a duplex protocol
