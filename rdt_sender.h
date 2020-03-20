@@ -60,5 +60,4 @@ void Sender_FromLowerLayer(struct packet *pkt);
 /* event handler, called when the timer expires */
 void Sender_Timeout();
 
-
 #endif  /* _RDT_SENDER_H_ */

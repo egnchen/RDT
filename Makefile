@@ -9,18 +9,18 @@ TARGETS = rdt_sim
 
 all: $(TARGETS)
 
-.cc.o:
+%.o: %.cc
 	g++ $(CCFLAGS) -c -o $@ $<
 
-rdt_sender.o: 	rdt_struct.h rdt_sender.h
+rdt_sender.o: 	rdt_struct.h rdt_utils.h rdt_sender.h
 
-rdt_receiver.o:	rdt_struct.h rdt_receiver.h 
+rdt_receiver.o:	rdt_struct.h rdt_utils.h rdt_receiver.h 
 
-rdt_sim.o:		rdt_struct.h
+rdt_sim.o:		rdt_struct.h rdt_utils.h
 
 rdt_utils.o:	rdt_utils.h
 
-rdt_sim: rdt_sim.o rdt_utils.o rdt_sender.o rdt_receiver.o
+rdt_sim: rdt_sim.o rdt_sender.o rdt_receiver.o rdt_utils.o
 	g++ $(LDFLAGS) -o $@ $^
 
 clean:

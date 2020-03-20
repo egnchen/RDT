@@ -20,11 +20,14 @@
 #include "rdt_struct.h"
 #include "rdt_receiver.h"
 
+static seqn_t window_start;
+static rdt_message in_buf[MAX_SEQ + 1];
 
 /* receiver initialization, called once at the very beginning */
 void Receiver_Init()
 {
     fprintf(stdout, "At %.2fs: receiver initializing ...\n", GetSimulationTime());
+    window_start = 0;
 }
 
 /* receiver finalization, called once at the very end.
@@ -40,25 +43,51 @@ void Receiver_Final()
    receiver */
 void Receiver_FromLowerLayer(struct packet *pkt)
 {
-    /* 1-byte header indicating the size of the payload */
-    int header_size = 1;
+    static rdt_message buffer;
+    rdt_message *rdtmsg = (rdt_message *)pkt;
 
-    /* construct a message and deliver to the upper layer */
-    struct message *msg = (struct message*) malloc(sizeof(struct message));
-    ASSERT(msg!=NULL);
+    if(!rdtmsg->check()) {
+        fprintf(stdout, "Receiver received a corrupted package, seq=%d(maybe corrupted)\n", rdtmsg->seq);
+        return;
+    }
 
-    msg->size = pkt->data[0];
+    // copy to our internal buffer
+    memcpy(in_buf + rdtmsg->seq, rdtmsg, sizeof(rdt_message));
+    rdtmsg = in_buf + rdtmsg->seq;
+    // set received flag
+    rdtmsg->flags |= rdt_message::RECEIVED;
+    rdtmsg->flags &= ~rdt_message::NAKED;
 
-    /* sanity check in case the packet is corrupted */
-    if (msg->size<0) msg->size=0;
-    if (msg->size>RDT_PKTSIZE-header_size) msg->size=RDT_PKTSIZE-header_size;
-
-    msg->data = (char*) malloc(msg->size);
-    ASSERT(msg->data!=NULL);
-    memcpy(msg->data, pkt->data+header_size, msg->size);
-    Receiver_ToUpperLayer(msg);
-
-    /* don't forget to free the space */
-    if (msg->data!=NULL) free(msg->data);
-    if (msg!=NULL) free(msg);
+    // turn to upper layer
+    if((in_buf[window_start].flags & rdt_message::RECEIVED) == 0) {
+        // the next frame has yet not been received, send nak
+        // we don't have timer on receiver side, so we have no way
+        // to timeout nak here. If nak is lost, this method will
+        // deteriorate to GNN
+        if((in_buf[window_start].flags & rdt_message::NAKED) == 0) {
+            in_buf[window_start].flags |= rdt_message::NAKED;
+            buffer.seq = 0;
+            buffer.ack = rdtmsg->seq;
+            buffer.flags = rdt_message::NAK;
+            buffer.len = 0;
+            buffer.fill_checksum();
+            Receiver_ToLowerLayer((packet *)&buffer);
+        }
+    }
+    while(in_buf[window_start].flags & rdt_message::RECEIVED) {
+        message msg = message{
+            int(in_buf[window_start].len), in_buf[window_start].payload};
+        Receiver_ToUpperLayer(&msg);
+        // turn off received flag
+        in_buf[window_start].flags &= ~rdt_message::RECEIVED;
+        inc(window_start);
+    }
+    
+    // send ack back
+    buffer.seq = 0; // not a duplex protocol
+    buffer.ack = window_start;
+    buffer.flags = 0;
+    buffer.len = 0;
+    buffer.fill_checksum();
+    Receiver_ToLowerLayer((packet *)&buffer);
 }

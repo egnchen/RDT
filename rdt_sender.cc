@@ -13,7 +13,6 @@
  *       (excluding this single-byte header)
  */
 
-
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,14 +21,12 @@
 
 #include "rdt_struct.h"
 #include "rdt_sender.h"
-#include "rdt_utils.h"
 
-using namespace utils;
-
-const int MAX_SEQ = 255;
-const int WINDOW_SIZE = 16;
-static packet in_buf[WINDOW_SIZE];
-static packet out_buf[WINDOW_SIZE];
+static rdt_message out_buf[MAX_SEQ + 1];
+static seqn_t window_start;
+static seqn_t next_to_send;
+static seqn_t next_seq_number;
+static seqn_t to_send;
 
 struct TimerItem {
     int id;
@@ -42,7 +39,7 @@ static TimerItem *prehead = &_prehead;
 
 static void Timer_AddTimeout(int id, double timeout) {
     TimerItem *cur = prehead;
-    time_t dest = GetSimulationTime() + timeout;
+    double dest = GetSimulationTime() + timeout;
     while(cur->next && cur->next->time < dest) cur = cur->next;
     TimerItem *new_item = new TimerItem{id, dest, cur->next};
     cur->next = new_item;
@@ -67,6 +64,11 @@ static void Timer_CancelTimeout(int id) {
     delete target;
 }
 
+// timeout handler
+static void Timer_Timeout(int id) {
+    // resend that particular one
+    Sender_ToLowerLayer((packet *)(out_buf + id));
+}
 
 void Sender_Timeout()
 {
@@ -77,13 +79,14 @@ void Sender_Timeout()
     }
     // check time for accuracy
     if(GetSimulationTime() < prehead->next->time - epsilon) {
-        fprintf(stdout, "Warning: Clock time out but not there yet."
-                        "Current time = %f, expected time = %f\n",
+        fprintf(stdout, "Warning: Clock timeout but not there yet."
+                        "Current time = %lf, expected time = %lf\n",
                         GetSimulationTime(), prehead->next->time);
     } else {
         // pop list
         TimerItem *item = prehead->next;
         prehead->next = prehead->next->next;
+        Timer_Timeout(item->id);
         delete item;
     }
     // restart timer for next event
@@ -91,15 +94,13 @@ void Sender_Timeout()
         Sender_StartTimer(prehead->next->time - GetSimulationTime());
 }
 
-template <typename T>
-static inline bool between(T a, T b, T c) {
-    return a < c ? (a <= b && b < c) : (a <= b || b < c);
-}
-
 /* sender initialization, called once at the very beginning */
 void Sender_Init()
 {
     fprintf(stdout, "At %.2fs: sender initializing ...\n", GetSimulationTime());
+    window_start = 0;
+    next_to_send = 0;
+    next_seq_number = 0;
 }
 
 /* sender finalization, called once at the very end.
@@ -111,38 +112,67 @@ void Sender_Final()
     fprintf(stdout, "At %.2fs: sender finalizing ...\n", GetSimulationTime());
 }
 
+
+/* send out all packets ready to be sent in current sliding window */
+static void Sender_SendPackets() {
+    while(between(window_start, to_send, seqn_t((window_start + WINDOW_SIZE) & MAX_SEQ))) {
+        rdt_message *buffer = out_buf + to_send;
+        inc(to_send);
+        // outgoing packet have no flags
+        buffer->flags = 0;
+        buffer->fill_checksum();
+        // add timer
+        Timer_AddTimeout(buffer->seq, SENDER_TIMEOUT);
+        Sender_ToLowerLayer((packet *)buffer);
+    }
+}
+
 /* event handler, called when a message is passed from the upper layer at the 
    sender */
 void Sender_FromUpperLayer(struct message *msg)
 {
-    /* split the message if it is too big */
-
-    /* reuse the same packet data structure */
-    rdt_message buffer;
-
+    // split the message and put it into buffer
     int cursor = 0; // points to the first unsent byte in the message
-
     while (cursor < msg->size) {
-        buffer.len = std::max(RDT_PAYLOAD_MAXSIZE, msg->size - cursor);
-        memcpy(buffer.payload, msg->data + cursor, buffer.len);
-
-        // calculate checksum
-        int crc = CRC16::calc((const char *)&buffer, 4 * sizeof(uint8_t));
-        crc = CRC16::calc(buffer.payload, buffer.len, crc);
-        
-        // write the checksum, big-endian
-        buffer.checksum = (crc >> 8) + (crc << 8) & 0xff;
-        /* send it out through the lower layer */
-        Sender_ToLowerLayer((packet *)&buffer);
-
+        rdt_message *buffer = out_buf + next_seq_number;
+        buffer->len = std::max(RDT_PAYLOAD_MAXSIZE, msg->size - cursor);
+        memcpy(buffer->payload, msg->data + cursor, buffer->len);
+        // write seq
+        buffer->seq = next_seq_number;
+        // this is not a duplex protocol, so ack doesn't really matter here
+        buffer->ack = 0;
         /* move the cursor */
-        cursor += buffer.len;
+        cursor += buffer->len;
+        // update sequence number
+        inc(next_seq_number);
+        if(next_seq_number == window_start) {
+            fprintf(stderr, "Warning: buffer pool is full, next_seq == window_start == %d\n", next_seq_number);
+        }
     }
+    Sender_SendPackets();
 }
 
 /* event handler, called when a packet is passed from the lower layer at the 
    sender */
 void Sender_FromLowerLayer(struct packet *pkt)
 {
+    rdt_message *rdtmsg = (rdt_message *)pkt;
+    // sender receive acks
+    // check validity
+    if(rdtmsg->check() == false) {
+        fprintf(stdout, "Info: Sender received a corrupted packet.\n");
+        return;
+    }
+    if(rdtmsg->flags == rdt_message::ACK) {
+        out_buf[rdtmsg->ack].flags &= rdt_message::ACKED;
+        Timer_CancelTimeout(rdtmsg->ack);
+        while(out_buf[window_start].flags & rdt_message::ACKED) {
+            inc(window_start);
+        }
+        Sender_SendPackets();
+    } else if(rdtmsg->flags == rdt_message::NAK) {
+        // resend that particular package
+        fprintf(stdout, "Resending packet seq=%d\n", rdtmsg->ack);
+        Sender_ToLowerLayer((packet *)(out_buf + rdtmsg->ack));
+    }
 }
-
