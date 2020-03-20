@@ -71,11 +71,11 @@ struct rdt_message {
     rdt_message(): flags(0) {}
 
     inline uint16_t get_checksum() {
-        assert(len < RDT_PAYLOAD_MAXSIZE);
+        assert(len <= RDT_PAYLOAD_MAXSIZE);
         assert((flags & 0xFE) == 0);
         constexpr int real_header_size = RDT_HEADER_SIZE - sizeof(uint16_t);
-        uint16_t crc = calc_crc16((const char *)this, real_header_size);
-        crc = calc_crc16(this->payload, this->len, crc);
+        uint16_t crc = CRC16::calc((const char *)this, real_header_size);
+        crc = CRC16::calc(this->payload, this->len, crc);
         return crc;
     }
 
@@ -86,9 +86,16 @@ struct rdt_message {
 
     // check if the packet is corrupted.
     inline bool check() {
-        if(len >= RDT_PAYLOAD_MAXSIZE)
+        if(len > RDT_PAYLOAD_MAXSIZE) {
+            fprintf(stdout, "Check packet: Invalid length in header.\n");
             return false;
-        return this->checksum == get_checksum();
+        }
+        uint16_t s = get_checksum();
+        if(this->checksum != s) {
+            fprintf(stdout, "Check checksum failed: Excepting %x, actual %x.\n", s, this->checksum);
+            return false;
+        }
+        return true;
     }
 };
 
@@ -97,17 +104,17 @@ static_assert(sizeof(rdt_message) == sizeof(packet));
 
 constexpr seqn_t MAX_SEQ = 255;
 constexpr seqn_t WINDOW_SIZE = 16;
-constexpr double SENDER_TIMEOUT = 0.25;
+constexpr double SENDER_TIMEOUT = 0.5;
+
 // make sure MAX_SEQ is 2**n - 1 and WINDOW_SIZE is 2**n
 static_assert((int(MAX_SEQ) & (int(MAX_SEQ) + 1)) == 0);
 static_assert((WINDOW_SIZE & (WINDOW_SIZE - 1)) == 0);
 
-// make sure that MAX_SEQ is 2**n - 1
-// and WINDOW_SIZE is 2**n
 // helper functions
-inline void inc(uint8_t &s) { ++s; s %= MAX_SEQ; }
-inline uint8_t add(uint8_t a, uint8_t b) { return (a + b) % MAX_SEQ; }
+inline void inc(uint8_t &s) { ++s; s &= MAX_SEQ; }
+inline uint8_t add(uint8_t a, uint8_t b) { return (a + b) & MAX_SEQ; }
 inline bool lt(uint8_t a, uint8_t b) { return (int8_t)(a - b) < 0; }
+inline bool lte(uint8_t a, uint8_t b) { return (int8_t)(a - b) <= 0; }
 inline bool between(uint8_t a, uint8_t b, uint8_t c) { return (lt(a,b) || a==b) && lt(b,c); }
 
 #endif  /* _RDT_STRUCT_H_ */

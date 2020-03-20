@@ -46,8 +46,15 @@ void Receiver_FromLowerLayer(struct packet *pkt)
     static rdt_message buffer;
     rdt_message *rdtmsg = (rdt_message *)pkt;
 
+    RECEIVER_INFO("Received a package, seq = %d, window = %d", rdtmsg->seq, window_start);
     if(!rdtmsg->check()) {
-        fprintf(stdout, "Receiver received a corrupted package, seq=%d(maybe corrupted)\n", rdtmsg->seq);
+        RECEIVER_INFO("Package corrupted, seq = %d?", rdtmsg->seq);
+        return;
+    }
+    
+    // packet ordering
+    if(lt(rdtmsg->seq, window_start)) {
+        RECEIVER_INFO("Packet seq less than window number, ignored.");
         return;
     }
 
@@ -58,36 +65,37 @@ void Receiver_FromLowerLayer(struct packet *pkt)
     rdtmsg->flags |= rdt_message::RECEIVED;
     rdtmsg->flags &= ~rdt_message::NAKED;
 
-    // turn to upper layer
-    if((in_buf[window_start].flags & rdt_message::RECEIVED) == 0) {
-        // the next frame has yet not been received, send nak
-        // we don't have timer on receiver side, so we have no way
-        // to timeout nak here. If nak is lost, this method will
-        // deteriorate to GNN
-        if((in_buf[window_start].flags & rdt_message::NAKED) == 0) {
-            in_buf[window_start].flags |= rdt_message::NAKED;
-            buffer.seq = 0;
-            buffer.ack = rdtmsg->seq;
-            buffer.flags = rdt_message::NAK;
-            buffer.len = 0;
-            buffer.fill_checksum();
-            Receiver_ToLowerLayer((packet *)&buffer);
-        }
-    }
     while(in_buf[window_start].flags & rdt_message::RECEIVED) {
         message msg = message{
             int(in_buf[window_start].len), in_buf[window_start].payload};
         Receiver_ToUpperLayer(&msg);
-        // turn off received flag
+        // invalidate this buffer by unsetting RECEIVED
         in_buf[window_start].flags &= ~rdt_message::RECEIVED;
         inc(window_start);
     }
-    
-    // send ack back
+
+    // the next frame has yet not been received, send nak
+    // we don't have timer on receiver side, so we have no way to timeout
+    // nak here. If nak is lost, this method will deteriorate to GBN.
+    if(rdtmsg->seq > window_start) {
+        if((in_buf[window_start].flags & rdt_message::NAKED) == 0) {
+            in_buf[window_start].flags |= rdt_message::NAKED;
+            buffer.seq = 0;
+            buffer.ack = window_start;
+            buffer.flags = rdt_message::NAK;
+            buffer.len = 0;
+            buffer.fill_checksum();
+            RECEIVER_INFO("<-- nak = %d", window_start);
+            Receiver_ToLowerLayer((packet *)&buffer);
+            return;
+        }
+    }
+    // send back ack
     buffer.seq = 0; // not a duplex protocol
-    buffer.ack = window_start;
-    buffer.flags = 0;
+    buffer.ack = (window_start - 1) & MAX_SEQ;
+    buffer.flags = rdt_message::ACK;
     buffer.len = 0;
     buffer.fill_checksum();
+    RECEIVER_INFO("<-- ack = %d", buffer.ack);
     Receiver_ToLowerLayer((packet *)&buffer);
 }
