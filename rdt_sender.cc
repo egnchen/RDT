@@ -77,10 +77,14 @@ static void Timer_CancelTimeout(int id) {
 // timeout handler
 static void Timer_Timeout(int id) {
     // resend that particular one
-    assert(between(window_start, id, (window_start + WINDOW_SIZE) & MAX_SEQ));
-    Timer_AddTimeout(id, SENDER_TIMEOUT);
-    SENDER_INFO("Packet timeout, resending packet seq = %d", out_buf[id].seq);
+    bool is_nak = bool(out_buf[id].flags & rdt_message::NAKING);
+    SENDER_INFO("Packet timeout, resending packet seq = %d, isnak = %d",
+        out_buf[id].seq, is_nak);
+    if(is_nak) out_buf[id].flags &= ~rdt_message::NAKING;
     Sender_ToLowerLayer((packet *)(out_buf + id));
+    if(is_nak) out_buf[id].flags |= rdt_message::NAKING;
+    if(is_nak) Timer_AddTimeout(id, NAK_TIMEOUT);
+    else Timer_AddTimeout(id, SENDER_TIMEOUT);
 }
 
 void Sender_Timeout()
@@ -201,16 +205,22 @@ void Sender_FromLowerLayer(struct packet *pkt)
         Sender_SendPackets();
     } else if(rdtmsg->flags == rdt_message::NAK) {
         SENDER_INFO("o<- nak = %d, window = %d", rdtmsg->ack, window_start);
-        if(lt(rdtmsg->ack, window_start)) {
+        seqn_t seq = rdtmsg->ack;
+        if(lt(seq, window_start)) {
             // nak is less than ack, packet reordered.
             SENDER_INFO("Ignoring nak since ack = %d", window_start);
         } else {
             // resend that particular package
-            Timer_CancelTimeout(rdtmsg->ack);
-            Timer_AddTimeout(rdtmsg->ack, SENDER_TIMEOUT);
-            SENDER_INFO("--> Resending packet seq = %d len =% d checksum = %x",
-                rdtmsg->ack, out_buf[rdtmsg->ack].len, out_buf[rdtmsg->ack].checksum);
-            Sender_ToLowerLayer((packet *)(out_buf + rdtmsg->ack));
+            // nak of the same packet may come back multiple times in a row
+            // set a timeout for it between retrying to avoid useless transfer
+            if(!(out_buf[seq].flags & rdt_message::NAKING)) {
+                Timer_CancelTimeout(seq);
+                SENDER_INFO("--> Resending packet seq = %d len =% d checksum = %x",
+                    seq, out_buf[seq].len, out_buf[seq].checksum);
+                Timer_AddTimeout(seq, NAK_TIMEOUT);
+                Sender_ToLowerLayer((packet *)(out_buf + seq));
+                out_buf[seq].flags |= rdt_message::NAKING;
+            }
         }
     }
 }

@@ -66,9 +66,9 @@ struct rdt_message {
     // checksum shouldn't be calculated when these bits are set
     static constexpr uint8_t ACKED = 2;
     static constexpr uint8_t RECEIVED = 4;
-    static constexpr uint8_t NAKED = 8;
+    static constexpr uint8_t NAKING = 8;
 
-    rdt_message(): flags(0) {}
+    rdt_message(): len(0), flags(0) {}
 
     inline uint16_t get_checksum() {
         assert(len <= RDT_PAYLOAD_MAXSIZE);
@@ -102,7 +102,8 @@ static_assert(sizeof(rdt_message) == sizeof(packet));
 
 constexpr seqn_t MAX_SEQ = 255;
 constexpr seqn_t WINDOW_SIZE = 16;
-constexpr double SENDER_TIMEOUT = 0.4;
+constexpr double SENDER_TIMEOUT = 1;
+constexpr double NAK_TIMEOUT = 0.2;
 
 // make sure MAX_SEQ is 2**n - 1 and WINDOW_SIZE is 2**n
 static_assert((int(MAX_SEQ) & (int(MAX_SEQ) + 1)) == 0);
