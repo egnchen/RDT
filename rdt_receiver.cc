@@ -7,8 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "rdt_struct.h"
 #include "rdt_receiver.h"
+#include "rdt_utils.h"
 
 static seqn_t window_start;
 static seqn_t received_last;

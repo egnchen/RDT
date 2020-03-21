@@ -9,8 +9,8 @@
 #include <queue>
 #include <algorithm>
 
-#include "rdt_struct.h"
 #include "rdt_sender.h"
+#include "rdt_utils.h"
 
 // packet ring buffer
 static rdt_message out_buf[MAX_SEQ + 1];
