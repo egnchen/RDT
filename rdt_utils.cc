@@ -1,9 +1,9 @@
-#include "rdt_utils.h"
-
 /*
  * CRC16 implemented in table-lookup
  * this code is derived from redis
  */
+
+#include "rdt_utils.h"
 
 const uint16_t CRC16::crc16tab[256]= {
     0x0000,0x1021,0x2042,0x3063,0x4084,0x50a5,0x60c6,0x70e7,
@@ -39,18 +39,15 @@ const uint16_t CRC16::crc16tab[256]= {
     0xef1f,0xff3e,0xcf5d,0xdf7c,0xaf9b,0xbfba,0x8fd9,0x9ff8,
     0x6e17,0x7e36,0x4e55,0x5e74,0x2e93,0x3eb2,0x0ed1,0x1ef0
 };
-/*
- * Calculate CRC-16 checksum
- */
+
+// Calculate CRC-16 checksum
 uint16_t CRC16::calc(const char *buf, int len, uint16_t crc) {
     for (int counter = 0; counter < len; counter++)
         crc = (crc<<8) ^ crc16tab[((crc>>8) ^ *buf++)&0x00FF];
     return crc;
 }
 
-/*
- * Check whether a buffer containing a CRC-16 checksum is valid.
- */
+// Check whether a buffer containing a CRC-16 checksum is valid.
 bool CRC16::check(const char *buf, int len) {
     return calc(buf, len) == 0;
 }

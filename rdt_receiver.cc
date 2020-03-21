@@ -1,16 +1,6 @@
 /*
  * FILE: rdt_receiver.cc
  * DESCRIPTION: Reliable data transfer receiver.
- * NOTE: This implementation assumes there is no packet loss, corruption, or 
- *       reordering.  You will need to enhance it to deal with all these 
- *       situations.  In this implementation, the packet format is laid out as 
- *       the following:
- *       
- *       |<-  1 byte  ->|<-             the rest            ->|
- *       | payload size |<-             payload             ->|
- *
- *       The first byte of each packet indicates the size of the payload
- *       (excluding this single-byte header)
  */
 
 #include <stdio.h>
@@ -48,6 +38,7 @@ void Receiver_FromLowerLayer(struct packet *pkt)
     static rdt_message buffer;
     rdt_message *rdtmsg = (rdt_message *)pkt;
 
+    // check packet
     if(!rdtmsg->check()) {
         RECEIVER_INFO("->x packet corrupted, seq = %d?", rdtmsg->seq);
         return;
@@ -66,6 +57,7 @@ void Receiver_FromLowerLayer(struct packet *pkt)
         // set received flag
         rdtmsg->flags |= rdt_message::RECEIVED;
 
+        // send content to upper layer
         while(in_buf[window_start].flags & rdt_message::RECEIVED) {
             message msg = message{
                 int(in_buf[window_start].len), in_buf[window_start].payload};

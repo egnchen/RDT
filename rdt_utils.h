@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <list>
 
-// debugger output
+// output macros
 #define SENDER_INFO(format, ...) \
     fprintf(stdout, "[%.2fs][INFO][ sender ]", GetSimulationTime());\
     fprintf(stdout, format "\n", ##__VA_ARGS__);
@@ -26,7 +26,7 @@
     fprintf(stderr, "[%.2fs][EROR][receiver]", GetSimulationTime());\
     fprintf(stderr, format "\n", ##__VA_ARGS__);
 
-
+// CRC16 checksum library
 class CRC16 {
 private:
     static const uint16_t crc16tab[];
