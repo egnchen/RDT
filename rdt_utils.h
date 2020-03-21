@@ -32,6 +32,9 @@
     fprintf(stderr, format "\n", ##__VA_ARGS__);
 
 // CRC16 checksum library
+// CRC16-ccitt (the one used in redis) is used here.
+// Generator function of which is: x**16 + x**12 + x**5 + 1
+// implementation can be found in rdt_utils.cc
 class CRC16 {
 private:
     static const uint16_t crc16tab[];
@@ -54,9 +57,6 @@ public:
  *      log useful states, but these higher bits **must** be set to zero
  *      when it's checksumed.
  * chk: Checksum of the whole packet(excluding checksum itself) with CRC16.
- *      CRC16-ccitt (the one used in redis) is used here.
- *      Generator function of which is: x**16 + x**12 + x**5 + 1
- *      implementation can be found in rdt_utils.cc
  * 
  * In a unidirectional protocol:
  * * Sender can only set the seq number. Ack number doesn't mean anything.

@@ -1,6 +1,8 @@
 /*
  * CRC16 implemented in table-lookup
- * this code is derived from redis
+ * 
+ * CRC16-ccitt (the one used in redis) is used here.
+ * Generator function of which is: x**16 + x**12 + x**5 + 1
  */
 
 #include "rdt_utils.h"
