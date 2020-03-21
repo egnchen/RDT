@@ -101,7 +101,7 @@ struct rdt_message {
 static_assert(sizeof(rdt_message) == sizeof(packet));
 
 constexpr seqn_t MAX_SEQ = 255;
-constexpr seqn_t WINDOW_SIZE = 16;
+constexpr seqn_t WINDOW_SIZE = 8;
 constexpr double SENDER_TIMEOUT = 1;
 constexpr double NAK_TIMEOUT = 0.2;
 

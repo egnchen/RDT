@@ -115,6 +115,9 @@ void Sender_AdvanceWindow() {
         out_buf[next_seq_number].seq = next_seq_number;
         SENDER_WARNING("Retrieving from buffer(%ld), seq=%d", external_buffer.size(), window_start);
         inc(next_seq_number);
+    } else {
+        // invalidate buffer
+        out_buf[window_start].len = 0;
     }
     inc(window_start);
 }
@@ -163,16 +166,30 @@ static void Sender_SendPackets() {
    sender */
 void Sender_FromUpperLayer(struct message *msg)
 {
-    // split the message and put it into buffer
+    // calculate current window range
+    uint8_t window_end = (window_start + WINDOW_SIZE) & MAX_SEQ;
+    if(between(window_start, next_seq_number, window_end))
+        window_end = next_seq_number;
     int cursor = 0; // points to the first unsent byte in the message
+    // split the message and put it into buffer
     while (cursor < msg->size) {
         rdt_message *buffer;
+        seqn_t before_next = (next_seq_number - 1) & MAX_SEQ;
         // note that next_seq_number == window_start iff there's nothing more to transfer
         if(((next_seq_number + 1) & MAX_SEQ) == window_start) {
             if(external_buffer.empty() || external_buffer.back().len == RDT_PAYLOAD_MAXSIZE)
                 external_buffer.emplace();
             buffer = &(external_buffer.back());
-            SENDER_WARNING("Appending to external buffer(%ld)", external_buffer.size());
+            SENDER_INFO("Appending to queue(%ld)", external_buffer.size());
+        } else if(lt(window_end, before_next)) {
+            if(out_buf[before_next].len == RDT_PAYLOAD_MAXSIZE) {
+                buffer = out_buf + next_seq_number;
+                buffer->seq = next_seq_number;
+                buffer->len = 0;
+                inc(next_seq_number);
+            } else {
+                buffer = out_buf + before_next;
+            }
         } else {
             // write & update sequence number in ring buffer
             buffer = out_buf + next_seq_number;
@@ -201,14 +218,14 @@ void Sender_FromLowerLayer(struct packet *pkt)
         return;
     }
     if(rdtmsg->flags == rdt_message::ACK) {
-        SENDER_INFO("o<- ack = %d, window = %d", rdtmsg->ack, window_start);
+        SENDER_INFO("o<- ack = %d", rdtmsg->ack);
         while(lte(window_start, rdtmsg->ack)) {
             Timer_CancelTimeout(out_buf[window_start].seq);
             Sender_AdvanceWindow();
         }
         Sender_SendPackets();
     } else if(rdtmsg->flags == rdt_message::NAK) {
-        SENDER_INFO("o<- nak = %d, window = %d", rdtmsg->ack, window_start);
+        SENDER_INFO("o<- nak = %d", rdtmsg->ack);
         seqn_t seq = rdtmsg->ack;
         if(lt(seq, window_start)) {
             // nak is less than ack, packet reordered.
@@ -219,8 +236,7 @@ void Sender_FromLowerLayer(struct packet *pkt)
             // set a timeout for it between retrying to avoid useless transfer
             if(!(out_buf[seq].flags & rdt_message::NAKING)) {
                 Timer_CancelTimeout(seq);
-                SENDER_INFO("--> Resending packet seq = %d len =% d checksum = %x",
-                    seq, out_buf[seq].len, out_buf[seq].checksum);
+                SENDER_INFO("--> Resending packet seq = %d len = %d", seq, out_buf[seq].len);
                 Timer_AddTimeout(seq, NAK_TIMEOUT);
                 Sender_ToLowerLayer((packet *)(out_buf + seq));
                 out_buf[seq].flags |= rdt_message::NAKING;
