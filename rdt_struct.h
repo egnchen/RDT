@@ -39,7 +39,7 @@ struct packet {
  * Quick note about my implementation
  * packet format:
  * |  1  |  1  |  1  |  1  |  2  |       the rest(len)       |
- * | ack | seq | len | rsv | chk |          payload          |
+ * | ack | seq | len | flg | chk |          payload          |
  * 
  * the whole message(except for checksum itself) is checksumed with crc16.
  * crc-16-ccitt (the one used in redis) is used here, and generator function of
@@ -102,7 +102,7 @@ static_assert(sizeof(rdt_message) == sizeof(packet));
 
 constexpr seqn_t MAX_SEQ = 255;
 constexpr seqn_t WINDOW_SIZE = 16;
-constexpr double SENDER_TIMEOUT = 0.5;
+constexpr double SENDER_TIMEOUT = 0.4;
 
 // make sure MAX_SEQ is 2**n - 1 and WINDOW_SIZE is 2**n
 static_assert((int(MAX_SEQ) & (int(MAX_SEQ) + 1)) == 0);

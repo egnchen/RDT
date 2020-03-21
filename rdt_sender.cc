@@ -16,13 +16,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <vector>
+#include <queue>
 #include <algorithm>
 
 #include "rdt_struct.h"
 #include "rdt_sender.h"
 
+// packet ring buffer
 static rdt_message out_buf[MAX_SEQ + 1];
+static std::queue<rdt_message> external_buffer;
+// parameters
 static seqn_t window_start;
 static seqn_t next_seq_number;
 static seqn_t to_send;
@@ -38,7 +41,7 @@ static TimerItem *prehead = &_prehead;
 
 static void Timer_AddTimeout(int id, double timeout) {
     TimerItem *cur = prehead;
-    SENDER_INFO("Timer: setting %d", id);
+    // SENDER_INFO("Timer: setting %d", id);
     double dest = GetSimulationTime() + timeout;
     while(cur->next && cur->next->time < dest) cur = cur->next;
     TimerItem *new_item = new TimerItem{id, dest, cur->next};
@@ -53,10 +56,10 @@ static void Timer_AddTimeout(int id, double timeout) {
 
 static void Timer_CancelTimeout(int id) {
     TimerItem *cur = prehead;
-    SENDER_INFO("Timer: cancelling %d", id);
+    // SENDER_INFO("Timer: cancelling %d", id);
     while(cur->next && cur->next->id != id) cur = cur->next;
     if(cur->next == nullptr) {
-        SENDER_WARNING("%d not found in timer queue.", id);
+        SENDER_ERROR("%d not found in timer queue.", id);
         return;
     }
     // remove this entry from linked list
@@ -87,31 +90,35 @@ void Sender_Timeout()
         SENDER_ERROR("Clock time out and timer queue is empty.");
         return;
     }
-    // check time for accuracy
-    if(GetSimulationTime() < prehead->next->time - epsilon) {
-        SENDER_ERROR("Warning: Clock timeout but not there yet. "
-                    "Current time = %.2f, expected time = %.2f",
-                    GetSimulationTime(), prehead->next->time);
-    } else {
-        // pop list
-        do {
-            auto item = prehead->next;
-            prehead->next = prehead->next->next;
-            int id = item->id;
-            delete item;
-            Timer_Timeout(id);
-        } while(prehead->next &&
-            GetSimulationTime() >= prehead->next->time - epsilon);
-    }
+    while(prehead->next && GetSimulationTime() >=
+        prehead->next->time - epsilon) {
+        auto item = prehead->next;
+        prehead->next = prehead->next->next;
+        int id = item->id;
+        delete item;
+        Timer_Timeout(id);
+    } 
     // restart timer for next event
     if(prehead->next)
         Sender_StartTimer(prehead->next->time - GetSimulationTime());
 }
 
+// Advance sliding window. Fetch buffer content from external buffer if necessary.
+void Sender_AdvanceWindow() {
+    if(!external_buffer.empty()) {
+        out_buf[next_seq_number] = external_buffer.front();
+        external_buffer.pop();
+        out_buf[next_seq_number].seq = next_seq_number;
+        SENDER_WARNING("Retrieving from buffer(%ld), seq=%d", external_buffer.size(), window_start);
+        inc(next_seq_number);
+    }
+    inc(window_start);
+}
+
 /* sender initialization, called once at the very beginning */
 void Sender_Init()
 {
-    fprintf(stdout, "At %.2fs: sender initializing ...\n", GetSimulationTime());
+    SENDER_INFO("Initializing...");
     window_start = 0;
     next_seq_number = 1;
 }
@@ -122,15 +129,14 @@ void Sender_Init()
    memory you allocated in Sender_init(). */
 void Sender_Final()
 {
-    fprintf(stdout, "At %.2fs: sender finalizing ...\n", GetSimulationTime());
+    SENDER_INFO("Finalizing...");
 }
-
 
 /* send out all packets ready to be sent in current sliding window */
 static void Sender_SendPackets() {
-    uint8_t window_end = next_seq_number;
-    if(lt((window_start + WINDOW_SIZE) & MAX_SEQ, window_end))
-        window_end = (window_start + WINDOW_SIZE) & MAX_SEQ;
+    uint8_t window_end = (window_start + WINDOW_SIZE) & MAX_SEQ;
+    if(between(window_start, next_seq_number, window_end))
+        window_end = next_seq_number;
     while(between(window_start, to_send, window_end)) {
         rdt_message *buffer = out_buf + to_send;
         // outgoing packet have no flags
@@ -139,10 +145,11 @@ static void Sender_SendPackets() {
         // add timer
         Timer_AddTimeout(buffer->seq, SENDER_TIMEOUT);
         SENDER_INFO( 
-            "--> packet seq = %03d, len = %03d, checksum = %04x, window = %03d - %03d",
-            buffer->seq, buffer->len, buffer->checksum, window_start, window_end);
+            "--> packet seq = %03d, len = %03d, window = %03d - %03d",
+            buffer->seq, buffer->len, window_start, window_end);
         Sender_ToLowerLayer((packet *)buffer);
         inc(to_send);
+        SENDER_INFO("to_send = %d", to_send);
     }
 }
 
@@ -153,22 +160,24 @@ void Sender_FromUpperLayer(struct message *msg)
     // split the message and put it into buffer
     int cursor = 0; // points to the first unsent byte in the message
     while (cursor < msg->size) {
-        rdt_message *buffer = out_buf + next_seq_number;
+        rdt_message *buffer;
+        // note that next_seq_number == window_start iff there's nothing more to transfer
+        if(((next_seq_number + 1) & MAX_SEQ) == window_start) {
+            SENDER_WARNING("Appending to external buffer(%ld)", external_buffer.size());
+            external_buffer.emplace();
+            buffer = &(external_buffer.back());
+        } else {
+            // write & update sequence number in ring buffer
+            buffer = out_buf + next_seq_number;
+            buffer->seq = next_seq_number;
+            inc(next_seq_number);
+        }
         buffer->len = std::min(RDT_PAYLOAD_MAXSIZE, msg->size - cursor);
         memcpy(buffer->payload, msg->data + cursor, buffer->len);
-        // write seq
-        buffer->seq = next_seq_number;
-        // this is not a duplex protocol, so ack doesn't really matter here
-        buffer->ack = 0;
-        /* move the cursor */
-        cursor += buffer->len;
-        // update sequence number
-        inc(next_seq_number);
-        if(next_seq_number == window_start) {
-            SENDER_ERROR("buffer pool is full, next_seq == window_start == %d", next_seq_number);
-        }
+        buffer->ack = 0;        // not a duplex protocol, ack doesn't matter here
+        cursor += buffer->len;  // move the cursor
     }
-    SENDER_INFO("Token in packets, max sequence number = %d", seqn_t(next_seq_number - 1));
+    SENDER_INFO("Token in packets, next sequence number = %d", next_seq_number);
     Sender_SendPackets();
 }
 
@@ -180,18 +189,18 @@ void Sender_FromLowerLayer(struct packet *pkt)
     // sender receive acks
     // check validity
     if(rdtmsg->check() == false) {
-        SENDER_INFO("Received a corrupted packet.");
+        SENDER_INFO("x<- Packet corrupted.");
         return;
     }
     if(rdtmsg->flags == rdt_message::ACK) {
-        SENDER_INFO("Received ack = %d, window = %d", rdtmsg->ack, window_start);
+        SENDER_INFO("o<- ack = %d, window = %d", rdtmsg->ack, window_start);
         while(lte(window_start, rdtmsg->ack)) {
             Timer_CancelTimeout(out_buf[window_start].seq);
-            inc(window_start);
+            Sender_AdvanceWindow();
         }
         Sender_SendPackets();
     } else if(rdtmsg->flags == rdt_message::NAK) {
-        SENDER_INFO("Sender received nak = %d, window = %d", rdtmsg->ack, window_start);
+        SENDER_INFO("o<- nak = %d, window = %d", rdtmsg->ack, window_start);
         if(lt(rdtmsg->ack, window_start)) {
             // nak is less than ack, packet reordered.
             SENDER_INFO("Ignoring nak since ack = %d", window_start);

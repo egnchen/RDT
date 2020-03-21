@@ -3,27 +3,27 @@
 
 // debugger output
 #define SENDER_INFO(format, ...) \
-    fprintf(stdout, "[%.2fs][ sender ][INFO]", GetSimulationTime());\
+    fprintf(stdout, "[%.2fs][INFO][ sender ]", GetSimulationTime());\
     fprintf(stdout, format "\n", ##__VA_ARGS__);
 
 #define SENDER_WARNING(format, ...) \
-    fprintf(stderr, "[%.2fs][ sender ][WARN]", GetSimulationTime());\
-    fprintf(stderr, format "\n", ##__VA_ARGS__);
+    fprintf(stdout, "[%.2fs][WARN][ sender ]", GetSimulationTime());\
+    fprintf(stdout, format "\n", ##__VA_ARGS__);
 
 #define SENDER_ERROR(format, ...) \
-    fprintf(stderr, "[%.2fs][ sender ][EROR]", GetSimulationTime());\
+    fprintf(stderr, "[%.2fs][EROR][ sender ]", GetSimulationTime());\
     fprintf(stderr, format "\n", ##__VA_ARGS__);
 
 #define RECEIVER_INFO(format, ...) \
-    fprintf(stdout, "[%.2fs][receiver][INFO]", GetSimulationTime());\
+    fprintf(stdout, "[%.2fs][INFO][receiver]", GetSimulationTime());\
     fprintf(stdout, format "\n", ##__VA_ARGS__);
     
 #define RECEIVER_WARNING(format, ...) \
-    fprintf(stdout, "[%.2fs][receiver][WARN]", GetSimulationTime());\
+    fprintf(stdout, "[%.2fs][WARN][receiver]", GetSimulationTime());\
     fprintf(stdout, format "\n", ##__VA_ARGS__);
 
 #define RECEIVER_ERROR(format, ...) \
-    fprintf(stderr, "[%.2fs][receiver][EROR]", GetSimulationTime());\
+    fprintf(stderr, "[%.2fs][EROR][receiver]", GetSimulationTime());\
     fprintf(stderr, format "\n", ##__VA_ARGS__);
 
 

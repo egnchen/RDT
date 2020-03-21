@@ -27,7 +27,7 @@ static rdt_message in_buf[MAX_SEQ + 1];
 /* receiver initialization, called once at the very beginning */
 void Receiver_Init()
 {
-    fprintf(stdout, "At %.2fs: receiver initializing ...\n", GetSimulationTime());
+    RECEIVER_INFO("Initializing...");
     window_start = 0;
     received_last = 0;
 }
@@ -38,7 +38,7 @@ void Receiver_Init()
    memory you allocated in Receiver_init(). */
 void Receiver_Final()
 {
-    fprintf(stdout, "At %.2fs: receiver finalizing ...\n", GetSimulationTime());
+    RECEIVER_INFO("Finalizing...");
 }
 
 /* event handler, called when a packet is passed from the lower layer at the 
@@ -48,10 +48,11 @@ void Receiver_FromLowerLayer(struct packet *pkt)
     static rdt_message buffer;
     rdt_message *rdtmsg = (rdt_message *)pkt;
 
-    RECEIVER_INFO("Received a package, seq = %d, window = %d", rdtmsg->seq, window_start);
     if(!rdtmsg->check()) {
-        RECEIVER_INFO("Package corrupted, seq = %d?", rdtmsg->seq);
+        RECEIVER_INFO("->x packet corrupted, seq = %d?", rdtmsg->seq);
         return;
+    } else {
+        RECEIVER_INFO("->o seq = %d, window = %d", rdtmsg->seq, window_start);
     }
     
     // if this packet's sequence number is within our range
@@ -92,7 +93,7 @@ void Receiver_FromLowerLayer(struct packet *pkt)
             }
         }
     } else {
-        RECEIVER_INFO("Packet seq less than window number, not saved.");
+        RECEIVER_WARNING("Packet seq less than window number, not saved.");
     }
     // send back ack
     buffer.seq = 0; // not a duplex protocol
