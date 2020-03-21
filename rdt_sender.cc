@@ -143,6 +143,8 @@ static void Sender_SendPackets() {
         window_end = next_seq_number;
     while(between(window_start, to_send, window_end)) {
         rdt_message *buffer = out_buf + to_send;
+        // not a duplex protocol, ack doesn't matter here
+        buffer->ack = 0;
         // outgoing packet have no flags
         buffer->flags = 0;
         buffer->fill_checksum();
@@ -167,19 +169,21 @@ void Sender_FromUpperLayer(struct message *msg)
         rdt_message *buffer;
         // note that next_seq_number == window_start iff there's nothing more to transfer
         if(((next_seq_number + 1) & MAX_SEQ) == window_start) {
-            SENDER_WARNING("Appending to external buffer(%ld)", external_buffer.size());
-            external_buffer.emplace();
+            if(external_buffer.empty() || external_buffer.back().len == RDT_PAYLOAD_MAXSIZE)
+                external_buffer.emplace();
             buffer = &(external_buffer.back());
+            SENDER_WARNING("Appending to external buffer(%ld)", external_buffer.size());
         } else {
             // write & update sequence number in ring buffer
             buffer = out_buf + next_seq_number;
             buffer->seq = next_seq_number;
+            buffer->len = 0;    // clear this buffer
             inc(next_seq_number);
         }
-        buffer->len = std::min(RDT_PAYLOAD_MAXSIZE, msg->size - cursor);
-        memcpy(buffer->payload, msg->data + cursor, buffer->len);
-        buffer->ack = 0;        // not a duplex protocol, ack doesn't matter here
-        cursor += buffer->len;  // move the cursor
+        int delta = std::min(RDT_PAYLOAD_MAXSIZE - buffer->len, msg->size - cursor);
+        memcpy(buffer->payload + buffer->len, msg->data + cursor, delta);
+        buffer->len += delta;
+        cursor += delta;  // move the cursor
     }
     SENDER_INFO("Token in packets, next sequence number = %d", next_seq_number);
     Sender_SendPackets();
